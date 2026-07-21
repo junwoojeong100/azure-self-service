@@ -1,0 +1,80 @@
+name: Build and deploy to Azure Container Apps
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-container-app
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: business-app
+
+jobs:
+  test:
+    name: Test Python application
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+  deploy:
+    name: Build and deploy
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push immutable container image
+        env:
+          ACR_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
+        run: |
+          ACR_LOGIN_SERVER="$(az acr show --name "$ACR_NAME" --query loginServer --output tsv)"
+          az acr login --name "$ACR_NAME"
+          docker build --tag "$ACR_LOGIN_SERVER/${IMAGE_NAME}:${GITHUB_SHA}" .
+          docker push "$ACR_LOGIN_SERVER/${IMAGE_NAME}:${GITHUB_SHA}"
+
+      - name: Deploy a new Container Apps revision
+        env:
+          ACR_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+        run: |
+          ACR_LOGIN_SERVER="$(az acr show --name "$ACR_NAME" --query loginServer --output tsv)"
+          az containerapp update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --container-name app \
+            --image "$ACR_LOGIN_SERVER/${IMAGE_NAME}:${GITHUB_SHA}" \
+            --set-env-vars "APP_RELEASE=${GITHUB_SHA}" "APP_ENVIRONMENT=production"
+
+      - name: Show deployed URL
+        env:
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+        run: |
+          FQDN="$(az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn --output tsv)"
+          echo "Application URL: https://${FQDN}"
