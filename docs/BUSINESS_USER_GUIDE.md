@@ -1,5 +1,15 @@
 # 현업 담당자 가이드: Copilot으로 FastAPI 앱을 Azure에 자율 배포하기
 
+## 이 가이드에서 할 일
+
+1. GitHub `production` 환경을 만들고 `main` 배포와 IT/서비스 오너 승인을 설정합니다.
+2. 프로비저닝 스크립트를 한 번 실행합니다. 필요한 GitHub 환경 변수는 자동 등록됩니다.
+3. 코드를 `main`에 푸시하고 승인을 완료합니다.
+
+**완료 기준:** GitHub Actions가 성공하고 배포된 컨테이너 앱 URL의 `/healthz`가 `status: ok`, 커밋 SHA, `production` 환경을 반환합니다.
+
+> **실습 원칙:** 각 체크포인트가 통과한 뒤 다음 단계로 진행합니다. 오류가 나면 마지막 표의 조치를 먼저 적용하고, 정상 상태를 확인한 뒤 재시도합니다.
+
 ## 1. 시작 전 확인
 
 IT 부서에서 본인에게 전용 RG와 그 RG 범위의 `Owner`를 부여했는지 확인합니다. 예:
@@ -18,23 +28,36 @@ rg-sales-jiyoon-dev
 - Python 3.12, Docker
 - GitHub Copilot 또는 Claude Code
 
+```bash
+gh auth status
+az account show --query "{subscription:id, tenant:tenantId}" --output table
+docker version --format "{{.Server.Version}}"
+```
+
+**체크포인트:** GitHub CLI와 Azure CLI가 본인 계정으로 로그인됐고 Docker 버전이 출력됩니다. IT가 제공한 전용 RG 이름도 준비합니다.
+
 ## 2. GitHub 저장소와 배포 환경 만들기
 
-이 저장소를 개인 또는 팀 저장소로 복제합니다. GitHub에서 **Settings → Environments → New environment**로 `production`을 생성하고 `main` 또는 보호된 릴리스 태그만 배포하도록 제한합니다.
+이 저장소를 개인 또는 팀 저장소로 복제합니다. GitHub에서 **Settings → Environments → New environment**로 `production`을 생성하고 **Deployment branches and tags**에서 `main`만 허용합니다.
 
-운영 배포에는 IT 또는 서비스 오너를 `Required reviewer`로 추가합니다. 이것은 현업의 개발 자율성을 유지하면서 운영 반영을 검토하는 안전장치입니다.
+운영 배포에는 IT 또는 서비스 오너를 `Required reviewer`로 추가하고 관리자 우회를 끕니다. 이것은 현업의 개발 자율성을 유지하면서 운영 반영을 검토하는 안전장치입니다.
+
+**체크포인트:** `production` 환경에 `main` 배포 제한과 승인자가 보입니다. 이 설정이 없으면 배포 전에 중단합니다.
 
 ## 3. 내 RG에 Azure 배포 환경을 만든다
 
 저장소 루트에서 본인 RG와 GitHub 저장소 이름을 넣어 실행합니다.
 
 ```bash
-chmod +x scripts/provision-team-environment.sh
+SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
+RESOURCE_GROUP="rg-sales-jiyoon-dev"
+GITHUB_REPOSITORY="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+
 ./scripts/provision-team-environment.sh \
-  --subscription-id "<SUBSCRIPTION_ID>" \
-  --resource-group "rg-sales-jiyoon-dev" \
+  --subscription-id "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
   --location "koreacentral" \
-  --github-repository "contoso/sales-automation"
+  --github-repository "$GITHUB_REPOSITORY"
 ```
 
 스크립트가 만드는 리소스는 모두 내 RG에 들어갑니다.
@@ -46,16 +69,13 @@ chmod +x scripts/provision-team-environment.sh
 | Log Analytics workspace | 컨테이너 로그 조회 |
 | GitHub Actions 관리 ID | OIDC로 Azure에 로그인해 이미지 Push와 ACA 배포 |
 
-스크립트는 GitHub CLI를 사용해 `production` 환경에 필요한 여섯 변수를 자동 등록합니다. 실행 전에 `production` 환경과 필수 승인·브랜치 정책을 설정해야 하며, 스크립트가 이를 덮어쓰지 않습니다. 값은 식별자이며 비밀이 아닙니다.
+스크립트는 GitHub CLI를 사용해 `production` 환경의 OIDC·RG·ACR·ACA 변수 여섯 개를 자동 등록합니다. 실행 전에 `production` 환경과 승인·브랜치 정책을 설정해야 하며, 스크립트는 이 보호 설정을 변경하지 않습니다.
 
-| 변수 | 값 |
-| --- | --- |
-| `AZURE_CLIENT_ID` | 스크립트가 출력한 관리 ID client ID |
-| `AZURE_TENANT_ID` | 스크립트가 출력한 tenant ID |
-| `AZURE_SUBSCRIPTION_ID` | 내 Azure 구독 ID |
-| `AZURE_RESOURCE_GROUP` | 내 RG 이름 |
-| `AZURE_CONTAINER_REGISTRY_NAME` | 스크립트가 만든 ACR 이름 |
-| `AZURE_CONTAINER_APP_NAME` | `business-app` |
+```bash
+gh variable list --env production
+```
+
+**체크포인트:** `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `AZURE_CONTAINER_REGISTRY_NAME`, `AZURE_CONTAINER_APP_NAME`이 모두 표시되고 스크립트가 출력한 Bootstrap URL이 열립니다.
 
 ## 4. FastAPI 앱을 Copilot 또는 Claude Code로 개발한다
 
@@ -72,6 +92,14 @@ uvicorn src.app:app --reload
 - 화면: `http://127.0.0.1:8000`
 - 상태 점검: `http://127.0.0.1:8000/healthz`
 - 자동 API 문서: `http://127.0.0.1:8000/docs`
+
+별도 터미널에서 다음을 실행합니다.
+
+```bash
+curl --fail http://127.0.0.1:8000/healthz
+```
+
+**체크포인트:** JSON 응답의 `status`가 `ok`입니다.
 
 ### AI에 요청하는 예시
 
@@ -92,7 +120,20 @@ git commit -m "Add sales request API"
 git push origin main
 ```
 
-`.github/workflows/deploy.yml`은 테스트 후 GitHub OIDC 토큰으로 Azure에 로그인합니다. 커밋 SHA로 컨테이너 이미지를 ACR에 Push하고, ACA의 새 revision을 배포합니다. GitHub **Actions**에서 `Build and deploy to Azure Container Apps` 실행이 완료되면 로그의 `Application URL`을 엽니다.
+`.github/workflows/deploy.yml`은 테스트 후 GitHub OIDC 토큰으로 Azure에 로그인합니다. 커밋 SHA로 컨테이너 이미지를 ACR에 Push하고, ACA의 새 revision을 배포합니다. GitHub **Actions**에서 `Build and deploy to Azure Container Apps`가 성공하면 로그의 `Application URL`을 열고 `/healthz`를 확인합니다.
+
+```bash
+gh run list --workflow deploy.yml --limit 1
+FQDN="$(az containerapp show \
+  --subscription "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --name business-app \
+  --query properties.configuration.ingress.fqdn \
+  --output tsv)"
+curl --fail "https://$FQDN/healthz"
+```
+
+**체크포인트:** 최근 workflow의 결론이 `success`이고 `/healthz`의 `release`는 방금 푸시한 커밋 SHA, `environment`는 `production`입니다.
 
 ## 6. 운영·비용 책임
 
@@ -106,7 +147,7 @@ git push origin main
 
 | 증상 | 조치 |
 | --- | --- |
-| OIDC Azure 로그인 실패 | `production` environment 이름, GitHub 저장소 이름, `AZURE_*` variables와 federated credential이 일치하는지 확인 |
+| OIDC Azure 로그인 실패 | `production` environment와 GitHub CLI 로그인을 확인한 뒤 프로비저닝 스크립트를 다시 실행합니다. 스크립트가 현재 저장소의 OIDC subject와 환경 변수를 다시 검증합니다. |
 | ACR Push 거부 | 스크립트가 완료됐는지, GitHub Actions 관리 ID에 해당 ACR `AcrPush`가 있는지 확인 |
 | 이미지 Pull 또는 앱 기동 실패 | ACA의 시스템 할당 ID `AcrPull`, 포트 8000, `/healthz`, Log Analytics 로그 확인 |
 | 비용 급증 | ACA replica 수, ACR 저장 이미지, Log Analytics 보존 기간을 확인하고 IT 비용 담당자에게 알림 |

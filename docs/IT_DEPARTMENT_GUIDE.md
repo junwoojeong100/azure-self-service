@@ -1,5 +1,15 @@
 # IT 부서 가이드: 현업 Owner 위임과 비용 거버넌스
 
+## 이 가이드에서 할 일
+
+1. 현업 담당자마다 전용 RG를 만들고, **그 RG에만** `Owner`를 부여합니다.
+2. 월 예산과 50%, 80%, 100% 알림을 설정합니다.
+3. 현업 담당자에게 [현업 담당자 가이드](BUSINESS_USER_GUIDE.md)와 RG 이름을 전달합니다.
+
+**완료 기준:** 담당자는 자신의 RG에만 `Owner`를 갖고, IT는 구독 범위 비용·정책을 계속 관리합니다.
+
+> **실습 원칙:** 각 단계의 확인 결과가 나오기 전에는 다음 단계로 진행하지 않습니다. 이 가이드에서는 IT가 구독·RG를 관리하고, 다음 가이드에서는 현업 담당자가 자기 RG만 사용합니다.
+
 ## 1. 운영 모델
 
 IT 부서는 각 현업 담당자에게 **전용 Azure Resource Group(RG)** 과 그 RG 범위의 **`Owner`** 역할을 제공합니다. 현업 담당자는 자기 RG 안에서 GitHub Copilot 또는 Claude Code의 도움으로 Azure Container Apps(ACA), Azure Container Registry(ACR), GitHub Actions를 만들고 운영합니다. IT는 구독·다른 RG·비용 거버넌스를 계속 관리합니다.
@@ -20,45 +30,46 @@ IT 부서: Subscription / Billing / Policy / Cost Management
 
 > `Owner`는 RG 안에서 리소스를 생성·삭제하고 역할도 위임할 수 있는 강한 권한입니다. 따라서 담당자에게 **구독 Owner를 부여하지 말고**, 전용 RG 이외의 scope에 역할을 주지 않습니다. IT가 Owner를 부여하려면 `Owner` 또는 `User Access Administrator`처럼 `Microsoft.Authorization/roleAssignments/write` 권한이 필요합니다.
 
-## 2. 담당자별 RG와 Owner를 준비한다
+## 2. 전용 RG와 Owner를 준비한다
 
 ### 2.1 RG를 만든다
 
 환경별 격리를 권장합니다. 개발과 운영을 같은 RG에 넣지 않습니다.
 
 ```bash
-az account set --subscription "<SUBSCRIPTION_ID>"
-az group create --name "rg-sales-jiyoon-dev" --location "koreacentral"
+SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
+RESOURCE_GROUP="rg-sales-jiyoon-dev"
+BUSINESS_OWNER="jiyoon@contoso.com"
+
+az group create \
+  --subscription "$SUBSCRIPTION_ID" \
+  --name "$RESOURCE_GROUP" \
+  --location "koreacentral" \
+  --tags \
+    CostCenter=training \
+    BusinessOwner="$BUSINESS_OWNER" \
+    Environment=dev \
+    Application=business-app
 ```
+
+`CostCenter=training`은 실습용 값입니다. 조직의 비용 센터 값이 있으면 그 값으로 바꿉니다.
 
 ### 2.2 RG 범위에서만 Owner를 위임한다
 
 저장소의 스크립트를 IT 권한으로 실행합니다.
 
 ```bash
-chmod +x scripts/assign-resource-group-owner.sh
 ./scripts/assign-resource-group-owner.sh \
-  --subscription-id "<SUBSCRIPTION_ID>" \
-  --resource-group "rg-sales-jiyoon-dev" \
-  --business-owner "jiyoon@contoso.com"
+  --subscription-id "$SUBSCRIPTION_ID" \
+  --resource-group "$RESOURCE_GROUP" \
+  --business-owner "$BUSINESS_OWNER"
 ```
 
-스크립트는 Microsoft Entra 사용자를 확인하고 아래 scope에만 `Owner`를 부여하며, 이미 같은 할당이 있으면 재사용합니다.
+스크립트는 Microsoft Entra 사용자를 확인하고 전용 RG 범위에만 `Owner`를 부여하며, 이미 같은 할당이 있으면 재사용합니다.
 
-```text
-/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/rg-sales-jiyoon-dev
-```
+**체크포인트:** 스크립트가 `Owner access confirmed`를 출력합니다. Azure portal에서 현업 담당자가 해당 RG는 열 수 있지만 다른 RG·구독에는 권한이 없는지 확인합니다.
 
 포털에서는 **Resource group → Access control (IAM) → Add role assignment → Owner**를 선택해 동일하게 구성할 수 있습니다. 현업 담당자가 Azure portal에서 자기 RG만 보이는지, 구독 및 다른 RG는 접근하지 못하는지 확인합니다.
-
-반복 배포 환경에서는 아래 Bicep 대안을 사용할 수 있습니다. 역할 할당이 현재 RG에만 scope되도록 `infra/business-owner-assignment.bicep`에 명시되어 있습니다.
-
-```bash
-az deployment group create \
-  --resource-group "rg-sales-jiyoon-dev" \
-  --template-file infra/business-owner-assignment.bicep \
-  --parameters businessOwnerPrincipalId="<USER_OBJECT_ID>"
-```
 
 ## 3. 현업에 전달할 셀프서비스 범위
 
@@ -66,8 +77,7 @@ az deployment group create \
 
 1. GitHub 저장소 생성 및 `production` environment 보호 설정
 2. `scripts/provision-team-environment.sh`으로 ACR·ACA·로그·OIDC 배포 ID 생성
-3. GitHub Actions variables 설정
-4. FastAPI 코드 변경, 테스트, `main` 푸시, ACA 배포와 롤백
+3. FastAPI 코드 변경, 테스트, `main` 푸시, ACA 배포와 롤백
 
 GitHub Actions에는 장기 클라이언트 비밀을 저장하지 않습니다. 스크립트가 설정한 federated credential은 해당 저장소의 `production` environment에서 발급한 GitHub OIDC 토큰만 신뢰합니다.
 
@@ -96,6 +106,7 @@ Azure CLI로 Action Group과 RG 예산을 자동화할 수도 있습니다. 아�
 ```bash
 IT_EMAIL="cloud-cost@contoso.com"
 RG="rg-sales-jiyoon-dev"
+START_DATE="$(date -u +%Y-%m-01T00:00:00Z)"
 ACTION_GROUP_ID="$(az monitor action-group create \
   --resource-group "$RG" \
   --name "ag-cost-sales-jiyoon" \
@@ -109,9 +120,11 @@ az consumption budget create-with-rg \
   --budget-name "monthly-sales-jiyoon" \
   --category Cost \
   --time-grain Monthly \
-  --time-period '{"start-date":"2026-07-01","end-date":"2031-12-31"}' \
-  --notifications "{\"at80\":{\"enabled\":\"true\",\"operator\":\"GreaterThanOrEqualTo\",\"threshold\":80.0,\"contact-emails\":[\"$IT_EMAIL\"],\"contact-groups\":[\"$ACTION_GROUP_ID\"]}}"
+  --time-period "{\"start-date\":\"$START_DATE\",\"end-date\":\"2031-12-31T23:59:59Z\"}" \
+  --notifications "{\"at50\":{\"enabled\":\"true\",\"operator\":\"GreaterThanOrEqualTo\",\"threshold\":50.0,\"contact-emails\":[\"$IT_EMAIL\"],\"contact-groups\":[\"$ACTION_GROUP_ID\"]},\"at80\":{\"enabled\":\"true\",\"operator\":\"GreaterThanOrEqualTo\",\"threshold\":80.0,\"contact-emails\":[\"$IT_EMAIL\"],\"contact-groups\":[\"$ACTION_GROUP_ID\"]},\"at100\":{\"enabled\":\"true\",\"operator\":\"GreaterThanOrEqualTo\",\"threshold\":100.0,\"contact-emails\":[\"$IT_EMAIL\"],\"contact-groups\":[\"$ACTION_GROUP_ID\"]}}"
 ```
+
+**체크포인트:** Azure portal의 **Cost Management → Budgets**에서 월 예산과 50%, 80%, 100% 알림 세 개가 보이는지 확인합니다. 예산 알림은 비용을 차단하지 않으므로, 초과 알림의 담당·중지 절차는 IT가 별도로 운영합니다.
 
 > RG `Owner`는 자기 RG 수준 예산도 변경할 수 있습니다. IT의 통제 기준은 담당자 RG 예산 하나에 의존하지 말고, 구독 scope의 Cost analysis·Budget·Export와 Azure Policy를 함께 사용합니다.
 
@@ -132,9 +145,11 @@ az consumption budget create-with-rg \
 4. 보존이 끝난 비운영 RG를 삭제합니다.
 
 ```bash
-SCOPE="/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/rg-sales-jiyoon-dev"
-az role assignment delete --assignee "<USER_OBJECT_ID>" --role "Owner" --scope "$SCOPE"
-az group delete --name "rg-sales-jiyoon-dev" --yes --no-wait
+BUSINESS_OWNER_OBJECT_ID="$(az ad user show --id "$BUSINESS_OWNER" --query id --output tsv)"
+SCOPE="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
+
+az role assignment delete --assignee "$BUSINESS_OWNER_OBJECT_ID" --role Owner --scope "$SCOPE"
+az group delete --subscription "$SUBSCRIPTION_ID" --name "$RESOURCE_GROUP" --yes --no-wait
 ```
 
 ## 공식 참고 자료

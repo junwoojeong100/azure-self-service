@@ -10,8 +10,8 @@ from pydantic import BaseModel
 
 
 app = FastAPI(
-    title="현업 앱 배포 데모",
-    description="GitHub Actions와 Azure Container Apps 배포 상태를 보여주는 데모 API입니다.",
+    title="현업 앱 배포 실습",
+    description="GitHub Actions와 Azure Container Apps 배포 실습의 상태 확인 API입니다.",
     version="1.0.0",
 )
 templates = Jinja2Templates(directory="src/templates")
