@@ -13,6 +13,7 @@ rg-sales-jiyoon-dev
 필수 준비물:
 
 - GitHub 저장소 관리자 권한
+- GitHub CLI 로그인: `gh auth login`
 - Azure CLI 로그인: `az login`
 - Python 3.12, Docker
 - GitHub Copilot 또는 Claude Code
@@ -45,7 +46,7 @@ chmod +x scripts/provision-team-environment.sh
 | Log Analytics workspace | 컨테이너 로그 조회 |
 | GitHub Actions 관리 ID | OIDC로 Azure에 로그인해 이미지 Push와 ACA 배포 |
 
-스크립트 출력의 여섯 값을 GitHub **Settings → Environments → production → Variables**에 추가합니다. 값은 식별자이며 비밀이 아닙니다.
+스크립트는 GitHub CLI를 사용해 `production` 환경에 필요한 여섯 변수를 자동 등록합니다. 실행 전에 `production` 환경과 필수 승인·브랜치 정책을 설정해야 하며, 스크립트가 이를 덮어쓰지 않습니다. 값은 식별자이며 비밀이 아닙니다.
 
 | 변수 | 값 |
 | --- | --- |

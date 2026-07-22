@@ -41,12 +41,35 @@ if ! [[ "$github_repository" =~ ^[^/]+/[^/]+$ ]]; then
   exit 1
 fi
 
+if ! command -v gh >/dev/null 2>&1; then
+  echo "GitHub CLI (gh) is required to configure production environment variables." >&2
+  exit 1
+fi
+
+if ! gh repo view "$github_repository" --json nameWithOwner >/dev/null; then
+  echo "Cannot access GitHub repository ${github_repository}. Authenticate gh with repository admin access." >&2
+  exit 1
+fi
+
+if ! gh api "repos/${github_repository}/environments/production" --silent >/dev/null; then
+  echo "GitHub production environment is missing. Create and protect it before provisioning." >&2
+  exit 1
+fi
+
+github_oidc_subject_prefix="$(gh api "repos/${github_repository}/actions/oidc/customization/sub" --jq .sub_claim_prefix)"
+if [[ -z "$github_oidc_subject_prefix" || "$github_oidc_subject_prefix" == "null" ]]; then
+  echo "Cannot determine the GitHub OIDC subject prefix for ${github_repository}." >&2
+  exit 1
+fi
+
 safe_name="$(printf '%s' "$resource_group" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9')"
 unique_suffix="$(printf '%s' "${subscription_id}-${resource_group}" | shasum | cut -c1-8)"
 acr_name="$(printf 'acr%s%s' "${safe_name:0:28}" "$unique_suffix" | cut -c1-50)"
 environment_name="cae-${resource_group}"
 app_name="business-app"
 identity_name="id-gha-deploy"
+federated_credential_name="github-production"
+federated_subject="${github_oidc_subject_prefix}:environment:production"
 
 az account set --subscription "$subscription_id"
 az extension add --name containerapp --upgrade --only-show-errors
@@ -63,14 +86,26 @@ az deployment group create \
   --output none
 
 identity_client_id="$(az identity show --name "$identity_name" --resource-group "$resource_group" --query clientId --output tsv)"
-az identity federated-credential create \
-  --name github-production \
+existing_subject="$(az identity federated-credential show \
+  --name "$federated_credential_name" \
   --identity-name "$identity_name" \
   --resource-group "$resource_group" \
-  --issuer "https://token.actions.githubusercontent.com" \
-  --subject "repo:${github_repository}:environment:production" \
-  --audiences "api://AzureADTokenExchange" \
-  --output none
+  --query subject \
+  --output tsv 2>/dev/null || true)"
+
+if [[ -z "$existing_subject" ]]; then
+  az identity federated-credential create \
+    --name "$federated_credential_name" \
+    --identity-name "$identity_name" \
+    --resource-group "$resource_group" \
+    --issuer "https://token.actions.githubusercontent.com" \
+    --subject "$federated_subject" \
+    --audiences "api://AzureADTokenExchange" \
+    --output none
+elif [[ "$existing_subject" != "$federated_subject" ]]; then
+  echo "Existing GitHub federated credential trusts ${existing_subject}, not ${federated_subject}." >&2
+  exit 1
+fi
 
 az containerapp registry set \
   --name "$app_name" \
@@ -82,11 +117,18 @@ az containerapp registry set \
 tenant_id="$(az account show --query tenantId --output tsv)"
 container_app_url="$(az containerapp show --name "$app_name" --resource-group "$resource_group" --query properties.configuration.ingress.fqdn --output tsv)"
 
+gh variable set AZURE_CLIENT_ID --env production --repo "$github_repository" --body "$identity_client_id"
+gh variable set AZURE_TENANT_ID --env production --repo "$github_repository" --body "$tenant_id"
+gh variable set AZURE_SUBSCRIPTION_ID --env production --repo "$github_repository" --body "$subscription_id"
+gh variable set AZURE_RESOURCE_GROUP --env production --repo "$github_repository" --body "$resource_group"
+gh variable set AZURE_CONTAINER_REGISTRY_NAME --env production --repo "$github_repository" --body "$acr_name"
+gh variable set AZURE_CONTAINER_APP_NAME --env production --repo "$github_repository" --body "$app_name"
+
 cat <<EOF
 
 Provisioning succeeded.
 
-Create the GitHub "production" environment, then set these environment variables:
+The GitHub "production" environment variables were configured:
   AZURE_CLIENT_ID=${identity_client_id}
   AZURE_TENANT_ID=${tenant_id}
   AZURE_SUBSCRIPTION_ID=${subscription_id}
