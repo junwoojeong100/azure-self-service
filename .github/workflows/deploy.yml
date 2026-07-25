@@ -36,13 +36,33 @@ jobs:
       contents: read
       id-token: write
     env:
-      # AZURE_CONTAINER_REPOSITORY is an environment scoped variable, so it only
-      # resolves inside this job. The shared platform model sets a per-user
-      # repository such as "rg-sales-jiyoon-dev/business-app"; the dedicated
-      # model leaves it unset and the registry holds a single repository.
-      IMAGE_NAME: ${{ vars.AZURE_CONTAINER_REPOSITORY || 'business-app' }}
+      IMAGE_NAME: ${{ vars.AZURE_CONTAINER_REPOSITORY }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_CONTAINER_REGISTRY_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
+          AZURE_CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+        run: |
+          for name in \
+            AZURE_CLIENT_ID \
+            AZURE_TENANT_ID \
+            AZURE_SUBSCRIPTION_ID \
+            AZURE_RESOURCE_GROUP \
+            AZURE_CONTAINER_REGISTRY_NAME \
+            AZURE_CONTAINER_APP_NAME \
+            IMAGE_NAME
+          do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing production environment variable: ${name}" >&2
+              exit 1
+            fi
+          done
 
       - name: Sign in to Azure with OIDC
         uses: azure/login@v2

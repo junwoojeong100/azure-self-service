@@ -1,5 +1,5 @@
 metadata description = '''
-Shared platform resources for the shared-platform isolation model.
+Shared platform resources for the fixed shared-platform architecture.
 
 IT deploys this once into a platform resource group that business users have no
 role on. Each business user keeps their own resource group for their container

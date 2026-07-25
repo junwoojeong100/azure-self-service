@@ -14,7 +14,7 @@ Usage:
     [--business-owner <user-principal-name>] \
     [--delete-resource-group]
 
-Run by IT. In the shared platform model, deleting the business user resource
+Run by IT. In the shared platform architecture, deleting the business user resource
 group is not enough: role assignments and registry content live in the platform
 resource group and survive that deletion. This script removes them in order and
 prints anything that still needs a manual decision.

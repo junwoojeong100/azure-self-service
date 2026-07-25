@@ -1,5 +1,5 @@
 metadata description = '''
-Per-business-user workload for the shared-platform isolation model.
+Per-business-user workload for the fixed shared-platform architecture.
 
 Deployed into the business user's own resource group. The container app joins the
 shared Container Apps environment by resource ID, and pushes and pulls images from
