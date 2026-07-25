@@ -3,7 +3,7 @@
 ## 이 가이드에서 할 일
 
 1. GitHub `production` 환경을 만들고 `main` 배포와 IT/서비스 오너 승인을 설정합니다.
-2. 프로비저닝 스크립트를 한 번 실행합니다. 필요한 GitHub 환경 변수는 자동 등록됩니다.
+2. 모델 A는 프로비저닝 스크립트를 직접 실행합니다. 모델 B는 저장소 이름을 IT에 전달하고 프로비저닝 완료를 기다립니다.
 3. 코드를 `main`에 푸시하고 승인을 완료합니다.
 
 **완료 기준:** GitHub Actions가 성공하고 배포된 컨테이너 앱 URL의 `/healthz`가 `status: ok`, 커밋 SHA, `production` 환경을 반환합니다.
@@ -25,26 +25,54 @@ rg-sales-jiyoon-dev
 - GitHub 저장소 관리자 권한
 - GitHub CLI 로그인: `gh auth login`
 - Azure CLI 로그인: `az login`
-- Python 3.12, Docker
+- Python 3.12
 - GitHub Copilot 또는 Claude Code
 
 ```bash
 gh auth status
 az account show --query "{subscription:id, tenant:tenantId}" --output table
-docker version --format "{{.Server.Version}}"
+python3 --version
 ```
 
-**체크포인트:** GitHub CLI와 Azure CLI가 본인 계정으로 로그인됐고 Docker 버전이 출력됩니다. IT가 제공한 전용 RG 이름도 준비합니다.
+**체크포인트:** GitHub CLI와 Azure CLI가 본인 계정으로 로그인됐고 Python 3.12가 출력됩니다. IT가 제공한 전용 RG 이름도 준비합니다.
 
 ## 2. GitHub 저장소와 배포 환경 만들기
 
-이 저장소를 개인 또는 팀 저장소로 복제합니다. GitHub에서 **Settings → Environments → New environment**로 `production`을 생성하고 **Deployment branches and tags**에서 `main`만 허용합니다.
+이 저장소를 본인 또는 팀이 관리하는 저장소로 fork한 뒤, **fork한 저장소를 clone하고 그 디렉터리에서 이후 명령을 실행합니다.**
 
-운영 배포에는 IT 또는 서비스 오너를 `Required reviewer`로 추가하고 관리자 우회를 끕니다. 이것은 현업의 개발 자율성을 유지하면서 운영 반영을 검토하는 안전장치입니다.
+```bash
+gh repo fork <source-owner>/azure-self-service --clone
+cd azure-self-service
+gh repo view --json nameWithOwner --jq .nameWithOwner
+```
+
+조직 소유 저장소로 fork하려면 `gh repo fork`에 `--org <organization>`을 추가합니다. 마지막 명령이 본인 또는 팀 소유의 `<owner>/<repository>`를 출력하는지 확인합니다.
+
+GitHub Free에서는 Environment를 공개 저장소에만 구성할 수 있습니다. 비공개 저장소는 GitHub Pro 또는 조직의 GitHub Team 이상이 필요하며, 플랜에 따라 일부 보호 규칙의 사용 범위가 다를 수 있습니다. 실습 전에 **Settings → Environments**에서 `Required reviewers`가 보이는지 확인하고, 보이지 않으면 공개 실습 저장소 또는 해당 기능을 지원하는 조직 저장소를 사용합니다.
+
+GitHub에서 **Settings → Environments → New environment**로 `production`을 생성하고 **Deployment branches and tags**에서 `main`만 허용합니다.
+
+운영 배포에는 IT 또는 서비스 오너를 `Required reviewer`로 추가하고 관리자 우회를 끕니다. 승인자는 먼저 해당 저장소의 collaborator 또는 조직 팀으로 접근 권한을 갖고 있어야 합니다. 이것은 현업의 개발 자율성을 유지하면서 운영 반영을 검토하는 안전장치입니다.
 
 **체크포인트:** `production` 환경에 `main` 배포 제한과 승인자가 보입니다. 이 설정이 없으면 배포 전에 중단합니다.
 
+모델 B를 사용한다면 현재 저장소 이름을 확인해 IT에 전달합니다.
+
+```bash
+gh repo view --json nameWithOwner --jq .nameWithOwner
+```
+
+IT가 `provision-user-workload.sh` 실행을 완료하고 `Provisioning succeeded`를 확인했다는 응답을 줄 때까지 기다립니다. 완료 응답을 받으면 다음을 실행합니다.
+
+```bash
+gh variable list --env production
+```
+
+**모델 B 체크포인트:** 모델 A의 변수 여섯 개와 `AZURE_CONTAINER_REPOSITORY`가 모두 표시됩니다. 확인 후 3절을 건너뛰고 4절부터 진행합니다.
+
 ## 3. 내 RG에 Azure 배포 환경을 만든다
+
+> **먼저 IT에 확인하세요.** 조직이 **공유 플랫폼 모델(모델 B)** 을 쓴다면 이 절을 실행하지 않습니다. 2절에서 저장소 이름을 전달받은 IT가 `provision-user-workload.sh`로 대신 프로비저닝합니다. 완료 후 4절부터 이어가며, `production` 변수에는 `AZURE_CONTAINER_REPOSITORY`가 하나 더 추가됩니다.
 
 저장소 루트에서 본인 RG와 GitHub 저장소 이름을 넣어 실행합니다.
 
@@ -124,10 +152,13 @@ git push origin main
 
 ```bash
 gh run list --workflow deploy.yml --limit 1
+SUBSCRIPTION_ID="$(gh variable get AZURE_SUBSCRIPTION_ID --env production)"
+RESOURCE_GROUP="$(gh variable get AZURE_RESOURCE_GROUP --env production)"
+CONTAINER_APP_NAME="$(gh variable get AZURE_CONTAINER_APP_NAME --env production)"
 FQDN="$(az containerapp show \
   --subscription "$SUBSCRIPTION_ID" \
   --resource-group "$RESOURCE_GROUP" \
-  --name business-app \
+  --name "$CONTAINER_APP_NAME" \
   --query properties.configuration.ingress.fqdn \
   --output tsv)"
 curl --fail "https://$FQDN/healthz"
@@ -148,6 +179,6 @@ curl --fail "https://$FQDN/healthz"
 | 증상 | 조치 |
 | --- | --- |
 | OIDC Azure 로그인 실패 | `production` environment와 GitHub CLI 로그인을 확인한 뒤 프로비저닝 스크립트를 다시 실행합니다. 스크립트가 현재 저장소의 OIDC subject와 환경 변수를 다시 검증합니다. |
-| ACR Push 거부 | 스크립트가 완료됐는지, GitHub Actions 관리 ID에 해당 ACR `AcrPush`가 있는지 확인 |
-| 이미지 Pull 또는 앱 기동 실패 | ACA의 시스템 할당 ID `AcrPull`, 포트 8000, `/healthz`, Log Analytics 로그 확인 |
+| ACR Push 거부 | 모델 A는 배포 ID의 `AcrPush`를 확인합니다. 모델 B는 공유 ACR의 `Reader`, 조건이 붙은 `Container Registry Repository Writer`, `AZURE_CONTAINER_REPOSITORY` 값을 확인합니다. |
+| 이미지 Pull 또는 앱 기동 실패 | 모델 A는 앱 시스템 ID의 `AcrPull`을 확인합니다. 모델 B는 조건이 붙은 `Container Registry Repository Reader`를 확인합니다. 공통으로 포트 8000, `/healthz`, Log Analytics 로그를 확인합니다. |
 | 비용 급증 | ACA replica 수, ACR 저장 이미지, Log Analytics 보존 기간을 확인하고 IT 비용 담당자에게 알림 |

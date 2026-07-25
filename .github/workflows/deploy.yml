@@ -13,9 +13,6 @@ concurrency:
   group: production-container-app
   cancel-in-progress: false
 
-env:
-  IMAGE_NAME: business-app
-
 jobs:
   test:
     name: Test Python application
@@ -38,6 +35,12 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      # AZURE_CONTAINER_REPOSITORY is an environment scoped variable, so it only
+      # resolves inside this job. The shared platform model sets a per-user
+      # repository such as "rg-sales-jiyoon-dev/business-app"; the dedicated
+      # model leaves it unset and the registry holds a single repository.
+      IMAGE_NAME: ${{ vars.AZURE_CONTAINER_REPOSITORY || 'business-app' }}
     steps:
       - uses: actions/checkout@v4
 
