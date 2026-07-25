@@ -139,6 +139,8 @@ az containerapp env list-usages \
 4. 담당자 직접 역할 할당 삭제
 5. 담당자 RG 삭제
 
+스크립트 실행자에게는 공유 ACR의 `Container Registry Repository Contributor`가 필요합니다. 권한이 없으면 리포지토리 조회 단계에서 삭제 전에 중단합니다.
+
 `--delete-resource-group` 없이 실행하면 삭제 대상을 확인하는 시험 실행입니다.
 
 ## 5. 큐와 데이터베이스 추가 기준

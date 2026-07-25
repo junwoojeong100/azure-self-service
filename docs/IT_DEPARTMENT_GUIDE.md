@@ -39,6 +39,7 @@ cd azure-self-service
 | 담당자 `Owner` 위임 | 담당자 RG | `Owner` 또는 `User Access Administrator` |
 | 담당자 워크로드 배포 | 담당자 RG | `Contributor` + `Role Based Access Control Administrator` |
 | 공유 ACR·ACA 환경 역할 할당 | 공유 RG | `Role Based Access Control Administrator` |
+| 공유 ACR 리포지토리 삭제 | 공유 ACR | `Container Registry Repository Contributor` |
 | GitHub 환경 변수 등록 | 담당자 저장소 | 저장소 `ADMIN` |
 
 공유 ACA 환경의 앱들은 네트워크와 `Managed Environment Consumption Cores` 쿼터를 공유합니다. 담당자 간 네트워크 격리, 서로 다른 리전, 독립 청구가 필수인 워크로드는 이 가이드의 범위가 아닙니다.
@@ -70,6 +71,30 @@ SUBSCRIPTION_ID="$(az account show --query id --output tsv)"
 - `ACR_ROLE_ASSIGNMENT_MODE=AbacRepositoryPermissions`
 
 ABAC 모드가 아니면 스크립트가 중단됩니다. 조건 없는 Repository 역할은 레지스트리 전체 데이터 접근이 되므로 사용하지 않습니다.
+
+### 2.1 플랫폼 운영자에게 오프보딩 권한을 부여한다
+
+담당자 리포지토리를 삭제하는 운영자에게 공유 ACR 범위 `Container Registry Repository Contributor`를 부여합니다.
+
+```bash
+PLATFORM_OPERATOR_OBJECT_ID="$(az ad signed-in-user show --query id --output tsv)"
+ACR_NAME="$(az acr list \
+  --resource-group rg-platform-shared \
+  --query "[0].name" \
+  --output tsv)"
+ACR_ID="$(az acr show \
+  --name "$ACR_NAME" \
+  --resource-group rg-platform-shared \
+  --query id --output tsv)"
+
+az role assignment create \
+  --assignee-object-id "$PLATFORM_OPERATOR_OBJECT_ID" \
+  --assignee-principal-type User \
+  --role "Container Registry Repository Contributor" \
+  --scope "$ACR_ID"
+```
+
+파이프라인 ID를 운영자로 사용하면 해당 principal ID와 `ServicePrincipal` 유형으로 바꿉니다. 이 역할은 공유 ACR의 모든 리포지토리 데이터를 삭제할 수 있으므로 제한된 운영자나 PIM으로 관리합니다.
 
 ## 3. 담당자를 온보딩한다
 
@@ -244,7 +269,7 @@ GitHub Actions에는 장기 클라이언트 비밀을 저장하지 않습니다.
 
 ## 6. 오프보딩
 
-담당자 RG만 삭제하면 공유 ACR 리포지토리와 역할 할당이 남습니다. 먼저 시험 실행합니다.
+담당자 RG만 삭제하면 공유 ACR 리포지토리와 역할 할당이 남습니다. 실행자는 공유 ACR 범위 `Container Registry Repository Contributor`를 가져야 합니다. 먼저 시험 실행합니다.
 
 ```bash
 SUBSCRIPTION_ID="$(az account show --query id --output tsv)"

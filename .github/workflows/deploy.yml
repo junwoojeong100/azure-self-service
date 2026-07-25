@@ -18,8 +18,8 @@ jobs:
     name: Test Python application
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install dependencies
@@ -38,7 +38,7 @@ jobs:
     env:
       IMAGE_NAME: ${{ vars.AZURE_CONTAINER_REPOSITORY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate deployment configuration
         env:
@@ -65,7 +65,7 @@ jobs:
           done
 
       - name: Sign in to Azure with OIDC
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -93,6 +93,11 @@ jobs:
             --container-name app \
             --image "$ACR_LOGIN_SERVER/${IMAGE_NAME}:${GITHUB_SHA}" \
             --set-env-vars "APP_RELEASE=${GITHUB_SHA}" "APP_ENVIRONMENT=production"
+          az containerapp ingress update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --target-port 8000 \
+            --output none
 
       - name: Show deployed URL
         env:
@@ -101,3 +106,10 @@ jobs:
         run: |
           FQDN="$(az containerapp show --name "$CONTAINER_APP_NAME" --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn --output tsv)"
           echo "Application URL: https://${FQDN}"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 20 "https://${FQDN}/healthz"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1

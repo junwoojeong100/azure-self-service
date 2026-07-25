@@ -56,7 +56,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = if (createConta
       ]
       ingress: {
         external: true
-        targetPort: 8000
+        targetPort: 80
       }
     }
     template: {

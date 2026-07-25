@@ -19,6 +19,9 @@ group is not enough: role assignments and registry content live in the platform
 resource group and survive that deletion. This script removes them in order and
 prints anything that still needs a manual decision.
 
+The caller needs Container Registry Repository Contributor on the shared registry
+to inspect and delete repository content.
+
 Nothing is deleted unless --delete-resource-group is passed; without it the
 script reports what it would remove.
 EOF
@@ -53,6 +56,40 @@ if [[ -z "$subscription_id" || -z "$platform_resource_group" || -z "$resource_gr
 fi
 
 az account set --subscription "$subscription_id"
+
+if [[ -z "$acr_name" ]]; then
+  discovered_registries=()
+  while IFS= read -r registry_name; do
+    [[ -n "$registry_name" ]] && discovered_registries+=("$registry_name")
+  done < <(az acr list --resource-group "$platform_resource_group" --query "[].name" --output tsv 2>/dev/null || true)
+
+  if [[ ${#discovered_registries[@]} -eq 1 ]]; then
+    acr_name="${discovered_registries[0]}"
+  elif [[ ${#discovered_registries[@]} -gt 1 ]]; then
+    echo "Multiple registries found in ${platform_resource_group}: ${discovered_registries[*]}" >&2
+    echo "Pass --acr-name to choose the one that holds this user's repository." >&2
+    exit 1
+  fi
+fi
+
+if [[ -z "$repository_name" ]]; then
+  repository_name="$(printf '%s' "$resource_group" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')/business-app"
+fi
+
+repository_present="false"
+if [[ -n "$acr_name" ]]; then
+  repository_check="$(az acr repository show \
+    --name "$acr_name" \
+    --repository "$repository_name" \
+    --output none 2>&1)" && repository_present="true" || repository_check_status=$?
+
+  if [[ "$repository_present" != "true" && "$repository_check" != *"is not found"* ]]; then
+    echo "Cannot inspect repository ${acr_name}/${repository_name}:" >&2
+    echo "$repository_check" >&2
+    echo "Grant the caller Container Registry Repository Contributor on ${acr_name} and retry." >&2
+    exit "${repository_check_status:-1}"
+  fi
+fi
 
 dry_run_note=""
 if [[ "$delete_resource_group" != "true" ]]; then
@@ -114,27 +151,8 @@ echo
 # Step 3: delete this user's repository from the shared registry. Registry content
 # is not part of the business user resource group.
 if [[ -z "$acr_name" ]]; then
-  discovered_registries=()
-  while IFS= read -r registry_name; do
-    [[ -n "$registry_name" ]] && discovered_registries+=("$registry_name")
-  done < <(az acr list --resource-group "$platform_resource_group" --query "[].name" --output tsv 2>/dev/null || true)
-
-  if [[ ${#discovered_registries[@]} -eq 1 ]]; then
-    acr_name="${discovered_registries[0]}"
-  elif [[ ${#discovered_registries[@]} -gt 1 ]]; then
-    echo "Multiple registries found in ${platform_resource_group}: ${discovered_registries[*]}" >&2
-    echo "Pass --acr-name to choose the one that holds this user's repository." >&2
-    exit 1
-  fi
-fi
-
-if [[ -z "$repository_name" ]]; then
-  repository_name="$(printf '%s' "$resource_group" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-')/business-app"
-fi
-
-if [[ -z "$acr_name" ]]; then
   echo "3. No registry found in ${platform_resource_group}; skipping repository cleanup."
-elif az acr repository show --name "$acr_name" --repository "$repository_name" --output none 2>/dev/null; then
+elif [[ "$repository_present" == "true" ]]; then
   echo "3. Repository ${acr_name}/${repository_name}"
   if [[ "$delete_resource_group" == "true" ]]; then
     az acr repository delete --name "$acr_name" --repository "$repository_name" --yes --output none
