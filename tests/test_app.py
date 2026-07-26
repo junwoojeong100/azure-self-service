@@ -13,6 +13,7 @@ class AppTestCase(unittest.TestCase):
         response = self.client.get("/")
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn("Microsoft Azure", response.text)
         self.assertIn("GitHub Actions", response.text)
 
     def test_health_check_returns_ok(self):
